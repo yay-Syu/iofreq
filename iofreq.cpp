@@ -487,3 +487,157 @@ std::vector<std::vector<std::complex<float>>> FFT::stft(const std::string& windo
     free(cfg);
     return X;
 }
+
+/*=== Energy ===*/
+std::vector<std::complex<float>> Energy::global(const std::string& window = "hann", int quality = 1,
+                                                    int &band1 = -1, int &band2 = -1)
+{
+    std::vector<std::vector<std::complex<float>>> samples = stft(window, quality);
+    std::vector<std::complex<float>> energy(samples.size(), 0.0f);
+
+    if (band1 == -1)
+        band1 = 0;
+    if (band2 == -1 && !samples.empty())
+        band2 = samples[0].size();
+
+    for (int n = 0; n < samples.size(); n++)
+    {
+        energy[n] = 0.0f;
+        for (int k = band1; k < band2; k++)
+        {
+            energy[n] += abs(pow(samples[n][k], 2));
+        }
+    }
+    return energy;
+}
+
+std::vector<std::complex<float>> Energy::global_rms(const std::string& window = "hann", int quality = 1,
+                                                int &band1 = -1, int &band2 = -1)
+{
+    std::vector<std::vector<std::complex<float>>> samples = stft(window, quality);
+    std::vector<std::complex<float>> energy(samples.size(), 0.0f);
+
+    int window_size, hop;
+    fft__get_window_params(quality, window_size, hop);
+
+    if (band1 == -1)
+        band1 = 0;
+    if (band2 == -1 && !samples.empty())
+        band2 = samples[0].size();
+
+    for (int n = 0; n < samples.size(); n++)
+    {
+        energy[n] = 0.0f;
+        for (int k = band1; k < band2; k++)
+        {
+            energy[n] += abs(pow(samples[n][k], 2));
+        }
+        energy[n] = sqrt((1/window_size) * energy[n]);
+    }
+    return energy;
+}
+
+std::vector<std::complex<float>> Energy::Z_score(const std::string& window = "hann", int quality = 1, 
+                        const std::string& type = "global", int &band1 = -1, int &band2 = -1)
+{
+    std::vector<std::complex<float>> energy;
+    if (type == "global") {
+        energy = global(window, quality, band1, band2);
+    } else if (type == "global_rms") {
+        energy = global_rms(window, quality, band1, band2);
+    } else {
+        energy = global(window, quality, band1, band2);
+    }
+
+    float sum = 0.0f;
+    for (int n = 0; n < energy.size(); n++)
+        sum += std::real(energy[n]);
+    float mean = sum / energy.size();
+
+    float sq_sum = 0.0f;
+    for (int n = 0; n < energy.size(); n++) {
+        float diff = std::real(energy[n]) - mean;
+        sq_sum += diff * diff;
+    }
+    float std_dev = sqrt(sq_sum / energy.size());
+    
+    std::vector<std::complex<float>> Z_energy(energy.size());
+    for (int n = 0; n < energy.size(); n++)
+        Z_energy[n] = std::complex<float>((std::real(energy[n]) - mean) / std_dev, 0.0f);
+    return Z_energy;
+}
+/*=== Energy ===*/
+
+Energy::Energy(const std::string& file_path, const std::string& type)
+    : FFT(file_path, type) {}
+
+// Clamps bin bounds to valid range — replaces -1 with full spectrum bounds
+static void energy__clamp_bands(int num_bins, int& band1, int& band2) {
+    if (band1 < 0 || band1 >= num_bins) band1 = 0;
+    if (band2 < 0 || band2 >= num_bins) band2 = num_bins - 1;
+    if (band1 > band2) std::swap(band1, band2);
+}
+
+std::vector<float> Energy::global(const std::string& window, int quality,
+                                  int band1, int band2)
+{
+    auto X = stft(window, quality);
+    if (X.empty()) return {};
+
+    int num_bins = (int)X[0].size();
+    energy__clamp_bands(num_bins, band1, band2);
+
+    std::vector<float> E(X.size());
+    for (int n = 0; n < (int)X.size(); n++) {
+        float sum = 0.0f;
+        for (int k = band1; k <= band2; k++)
+            sum += std::norm(X[n][k]); // std::norm = |z|^2 for complex
+        E[n] = sum;
+    }
+    return E;
+}
+
+std::vector<float> Energy::global_rms(const std::string& window, int quality,
+                                      int band1, int band2)
+{
+    auto X = stft(window, quality);
+    if (X.empty()) return {};
+
+    int num_bins = (int)X[0].size();
+    energy__clamp_bands(num_bins, band1, band2);
+
+    int M = band2 - band1 + 1; // number of bins in the range
+
+    std::vector<float> E(X.size());
+    for (int n = 0; n < (int)X.size(); n++) {
+        float sum = 0.0f;
+        for (int k = band1; k <= band2; k++)
+            sum += std::norm(X[n][k]);
+        E[n] = sqrtf(sum / (float)M);
+    }
+    return E;
+}
+
+std::vector<float> Energy::Z_score(const std::vector<float>& energy)
+{
+    if (energy.empty()) return {};
+
+    // Compute mean
+    float mean = 0.0f;
+    for (float e : energy) mean += e;
+    mean /= (float)energy.size();
+
+    // Compute standard deviation
+    float variance = 0.0f;
+    for (float e : energy) variance += (e - mean) * (e - mean);
+    float sigma = sqrtf(variance / (float)energy.size());
+
+    // Avoid division by zero if all values are identical
+    if (sigma == 0.0f) return std::vector<float>(energy.size(), 0.0f);
+
+    std::vector<float> Z(energy.size());
+    for (int n = 0; n < (int)energy.size(); n++)
+        Z[n] = (energy[n] - mean) / sigma;
+
+    return Z;
+}
