@@ -49,11 +49,38 @@ int main()
     std::cout << "stft blackman (quality 0) : " << s_wav.size() << " frames, "
               << (s_wav.empty() ? 0 : s_wav[0].size()) << " bins\n";
 
-    // ------------------------------------------------------------------ Audio_load only (no FFT)
+    // ------------------------------------------------------------------ Audio_load only
     std::cout << "\n=== Audio_load only ===\n";
     Audio_load loader("sample.wav", "wav");
     loader.wav_load();
     // loader.fft() — not available, Audio_load has no FFT methods
+
+    // ------------------------------------------------------------------ Energy
+    std::cout << "\n=== Energy ===\n";
+    Energy nrg("sample.wav", "wav");
+    nrg.wav_load();
+
+    // Global energy per frame — full spectrum
+    auto E = nrg.global("hann", 1);
+    std::cout << "global energy frames : " << E.size() << "\n";
+    if (!E.empty())
+        std::cout << "frame[0] energy      : " << E[0] << "\n";
+
+    // Global energy per frame — restricted to bins 10 to 50 (e.g. low frequencies)
+    auto E_band = nrg.global("hann", 1, 10, 50);
+    std::cout << "global energy (band 10-50) frames : " << E_band.size() << "\n";
+
+    // RMS energy per frame — full spectrum
+    auto E_rms = nrg.global_rms("hann", 1);
+    std::cout << "rms energy frames    : " << E_rms.size() << "\n";
+    if (!E_rms.empty())
+        std::cout << "frame[0] rms energy  : " << E_rms[0] << "\n";
+
+    // Z-score normalization on top of any energy vector
+    auto Z = Energy::Z_score(E);
+    std::cout << "z-score frames       : " << Z.size() << "\n";
+    if (!Z.empty())
+        std::cout << "frame[0] z-score     : " << Z[0] << "\n";
 
     return 0;
 }
