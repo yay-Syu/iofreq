@@ -1,6 +1,8 @@
-# audio_load
+# iofreq
 
-A lightweight C++ audio loader with FFT and STFT support. Decodes MP3, FLAC and WAV files into normalized float PCM via `Audio_load`, then optionally runs frequency-domain analysis via the `FFT` subclass.
+[![GitHub](https://img.shields.io/badge/github-yay--Syu/iofreq-blue)](https://github.com/yay-Syu/iofreq)
+
+Lightweight C++ module for audio file loading (MP3, FLAC, WAV) and frequency domain analysis via FFT and STFT.
 
 ---
 
@@ -37,8 +39,8 @@ Audio_load      decodes MP3 / FLAC / WAV into float PCM [-1, 1]
 ## Build
 
 ```bash
-g++ -c audio_load.cpp -o audio_load.o
-g++ example.cpp audio_load.o -o my_program -lFLAC -lkissfft
+g++ -c iofreq.cpp -o iofreq.o
+g++ example.cpp iofreq.o -o my_program -lFLAC -lkissfft
 ```
 
 ---
