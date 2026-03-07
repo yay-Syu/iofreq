@@ -2,7 +2,7 @@
 
 [![GitHub](https://img.shields.io/badge/github-yay--Syu/iofreq-blue)](https://github.com/yay-Syu/iofreq)
 
-Lightweight C++ module for audio file loading (MP3, FLAC, WAV) and frequency domain analysis via FFT and STFT.
+Lightweight C++ module for audio file loading (MP3, FLAC, WAV) and frequency domain analysis via FFT, STFT and spectral energy.
 
 ---
 
@@ -11,9 +11,10 @@ Lightweight C++ module for audio file loading (MP3, FLAC, WAV) and frequency dom
 ```
 Audio_load      decodes MP3 / FLAC / WAV into float PCM [-1, 1]
     └── FFT     adds fft() and stft() on top of the loaded audio
+        └── Energy  adds spectral energy analysis on top of FFT
 ```
 
-`Audio_load` can be used standalone if only raw samples are needed. `FFT` extends it with frequency analysis.
+`Audio_load` can be used standalone if only raw samples are needed. `FFT` extends it with frequency analysis. `Energy` extends `FFT` with energy metrics.
 
 ---
 
@@ -23,6 +24,10 @@ Audio_load      decodes MP3 / FLAC / WAV into float PCM [-1, 1]
 - Full-signal FFT on channel 0 via `FFT::fft()`
 - Short-Time Fourier Transform via `FFT::stft()` with Hann, Hamming or Blackman window
 - 4 STFT quality levels mapping to window sizes 512, 1024, 2048 and 4096
+- Per-frame spectral energy via `Energy::global()`
+- Per-frame RMS energy via `Energy::global_rms()`
+- Z-score normalization via `Energy::Z_score()`
+- All energy methods support optional frequency band restriction
 
 ---
 
@@ -52,6 +57,18 @@ g++ example.cpp iofreq.o -o my_program -lFLAC -lkissfft
 | `"hann"` | General purpose, good sidelobe suppression |
 | `"hamming"` | Slightly higher main lobe, common in speech processing |
 | `"blackman"` | Best sidelobe suppression, wider main lobe |
+
+---
+
+## Energy methods
+
+| Method | Formula | Description |
+|---|---|---|
+| `global()` | `E[n] = Σ\|X[n][k]\|²` | Sum of squared magnitudes per frame |
+| `global_rms()` | `E[n] = sqrt(1/M * Σ\|X[n][k]\|²)` | RMS energy — normalized across window sizes |
+| `Z_score()` | `Z[n] = (E[n] - μ) / σ` | Centers and scales any energy vector |
+
+`band1` and `band2` restrict all energy computations to a frequency bin range. Set to `-1` to use the full spectrum.
 
 ---
 
