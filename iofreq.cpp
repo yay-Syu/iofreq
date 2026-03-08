@@ -23,6 +23,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <algorithm>
 
 #include "minimp3.h"
 #include <FLAC/stream_decoder.h>
@@ -640,4 +641,559 @@ std::vector<float> Energy::Z_score(const std::vector<float>& energy)
         Z[n] = (energy[n] - mean) / sigma;
 
     return Z;
+}
+
+/*=== Intensity ===*/
+std::vector<float> Intensity::base(const std::vector<float>& energy, float acceleration_param,
+                        float velocity_param, float intensity_param)
+{
+    // normalize weights
+    if (acceleration_param + velocity_param + intensity_param != 0.0f) 
+    {
+        float adjustment = acceleration_param + velocity_param + intensity_param;
+        acceleration_param /= adjustment;
+        velocity_param     /= adjustment;
+        intensity_param    /= adjustment;
+    }
+    auto max_energy = std::max_element(energy.begin(), energy.end());
+    float maxE = (max_energy == energy.end() ? 1.0f : *max_energy + 1e-6f);
+
+    std::vector<float> norm(energy.size());
+    for (int n = 0; n < (int)energy.size(); n++)
+        norm[n] = energy[n] / maxE;
+
+    std::vector<float> velocity(energy.size(), 0.0f);
+    for (int n = 1; n < (int)energy.size(); n++)
+        velocity[n] = (norm[n] - norm[n - 1]) / (energy[n] + 1e-6f);
+
+    std::vector<float> acceleration(energy.size(), 0.0f);
+    for (int n = 1; n < (int)energy.size(); n++)
+        acceleration[n] = velocity[n] - velocity[n - 1];
+
+    std::vector<float> intensity(energy.size(), 0.0f);
+    for (int n = 0; n < (int)energy.size(); n++)
+        intensity[n] = intensity_param * norm[n]
+                     + velocity_param * velocity[n]
+                     + acceleration_param * acceleration[n];
+    auto max_intensity = std::max_element(intensity.begin(), intensity.end());
+    if (max_intensity != intensity.end()) {
+        float mx = *max_intensity;
+        for (int n = 0; n < (int)energy.size(); n++)
+            intensity[n] /= mx;
+    }
+    return intensity;
+}
+
+std::vector<float> Intensity::velocity(const std::vector<float>& intensity,
+                                       float intensity_param,
+                                       float velocity_param,
+                                       char type)
+{
+    if (velocity_param + intensity_param != 0.0f) {
+        float adjustment = velocity_param + intensity_param;
+        velocity_param   /= adjustment;
+        intensity_param  /= adjustment;
+    }
+
+    auto max_intensity = std::max_element(intensity.begin(), intensity.end());
+    float maxI = (max_intensity == intensity.end() ? 1.0f : *max_intensity + 1e-6f);
+
+    std::vector<float> velocity(intensity.size(), 0.0f);
+    for (int n = 1; n < (int)intensity.size(); n++)
+        velocity[n] = (intensity[n] - intensity[n - 1]) / maxI;
+
+    switch (type) {
+        case '+':
+            for (int n = 0; n < (int)intensity.size(); n++)
+                velocity[n] = intensity_param * intensity[n] + velocity_param * velocity[n];
+            break;
+        case '*':
+            for (int n = 0; n < (int)intensity.size(); n++)
+                velocity[n] = intensity[n] * (1 + velocity_param * velocity[n]);
+            break;
+        default:
+            for (int n = 0; n < (int)intensity.size(); n++)
+                velocity[n] = intensity_param * intensity[n] + velocity_param * velocity[n];
+            break;
+    }
+    return velocity;
+}
+
+std::vector<float> Intensity::acceleration(const std::vector<float>& intensity,
+                                           float intensity_param,
+                                           float acceleration_param,
+                                           char type)
+{
+    // normalize parameters as before
+    if (acceleration_param + intensity_param != 0.0f) {
+        float adjustment = acceleration_param + intensity_param;
+        acceleration_param /= adjustment;
+        intensity_param    /= adjustment;
+    }
+
+    auto max_intensity = std::max_element(intensity.begin(), intensity.end());
+    float maxI = (max_intensity == intensity.end() ? 1.0f : *max_intensity + 1e-10f);
+    std::vector<float> vel(intensity.size(), 0.0f);
+    for (int n = 1; n < (int)intensity.size(); n++)
+        vel[n] = (intensity[n] - intensity[n - 1]) / maxI;
+
+    auto max_vel_it = std::max_element(vel.begin(), vel.end());
+    float maxV = (max_vel_it == vel.end() ? 1.0f : *max_vel_it + 1e-10f);
+
+    std::vector<float> accel(intensity.size(), 0.0f);
+    for (int n = 1; n < (int)intensity.size(); n++)
+        accel[n] = fabs(vel[n] - vel[n - 1]) / maxV;
+
+    switch (type) {
+        case '+':
+            for (int n = 0; n < (int)intensity.size(); n++)
+                accel[n] = intensity_param * intensity[n] + acceleration_param * accel[n];
+            break;
+        case '*':
+            for (int n = 0; n < (int)intensity.size(); n++)
+                accel[n] = intensity[n] * (1 + acceleration_param * accel[n]);
+            break;
+        default:
+            for (int n = 0; n < (int)intensity.size(); n++)
+                accel[n] = intensity_param * intensity[n] + acceleration_param * accel[n];
+            break;
+    }
+
+    return accel;
+}
+
+std::vector<float> Intensity::combined(const std::vector<float>& intensity,
+                                       float intensity_param,
+                                       float velocity_param,
+                                       float acceleration_param,
+                                       char type)
+{
+    std::vector<float> vel = velocity(intensity, intensity_param, velocity_param, type);
+    std::vector<float> acc = acceleration(intensity, intensity_param, acceleration_param, type);
+
+    std::vector<float> combined(intensity.size(), 0.0f);
+    switch (type)
+    {
+    case "+": 
+        for (int n = 0; n < (int)intensity.size(); n++)
+            combined[n] = intensity_param * intensity[n] + velocity_param * vel[n] + acceleration_param * acc[n];
+        break;
+    case "*":
+        for (int n = 0; n < (int)intensity.size(); n++)
+            combined[n] = intensity[n] * (1 + velocity_param * vel[n] + acceleration_param * acc[n]);
+        break;
+    default:
+        for (int n = 0; n < (int)intensity.size(); n++)
+            combined[n] = intensity_param * intensity[n] + velocity_param * vel[n] + acceleration_param * acc[n];
+        break;
+    }
+    return combined;
+}
+
+std::vector<float> Intensity::smooth(const std::vector<float>& intensity, float smoothing_param)
+{
+    if (smoothing_param <= 0.0f || smoothing_param >= 1.0f)
+        smoothing_param = std::clamp(smoothing_param, 0.0f, 1.0f);
+    std::vector<float> smoothed(intensity.size(), 0.0f);
+
+    smoothed[0] = intensity[0];
+    for (int n = 1; n < (int)intensity.size(); n++)
+    {
+        smoothed[n] = smoothing_param * intensity[n] + (1.0f - smoothing_param) * smoothed[n-1];
+    }
+    return smoothed;
+}
+
+std::vector<float> Intensity::relative(std::vector<float>& intensity, std::vector<float>& smoothed_intensity)
+{
+    int n(0);
+    if (intensity >= smoothed_intensity)
+        n = smoothed_intensity.size();
+    else
+        n = intensity.size();
+    
+    std::vector<float> relative(n, 0.0f);
+
+    for (int i=0; i < n; i++)
+        relative[i] = intensity[i] / smoothed_intensity[i];
+    return relative;
+}
+
+static std::vector<float> Intensity::centered(std::vector<float>& intensity, std::vector<float>& smoothed_intensity)
+{
+    int n(0);
+    if (intensity >= smoothed_intensity)
+        n = smoothed_intensity.size();
+    else
+        n = intensity.size();
+    
+    std::vector<float> relative(n, 0.0f);
+
+    for (int i=0; i < n; i++)
+        relative[i] = intensity[i] - smoothed_intensity[i];
+    //Cela donne l’énergie excédentaire
+    return relative;
+}
+
+static std::vector<float> Intensity::logarithmic(std::vector<float>& intensity, char rms)
+{
+    int rms(10);
+    switch (rms)
+    {
+    case "o" : rms = 20; break;
+    default: break;
+    }
+    std::vector<float> logarithm(intensity.size(), 0.0f);
+    for (int n=0; n < intensity.size; n++)
+        logarithm[n] = rms * log10(intensity[n] + 1e-10f);
+    return logarithm;
+}
+
+std::vector<float> Intensity::derived(std::vector<float>& intensity)
+{
+    std::vector<float> ddx(intensity.size(), 0.0f);
+    for (int n = 1; n < intensity.size(); n++)
+        ddx[n] = intensity[n] - intensity[n-1];
+    return ddx;
+}
+
+std::vector<float> Intensity::spectral(std::vector<std::vector<std::complex<float>>>& stft, int quality)
+{
+    std::vector<float> spec(stft.size(), 0.0f);
+    float flow;
+    float sum;
+
+    int window_size, hop;
+    fft__get_window_params(quality, window_size, hop)
+    for (int n=1; n < stft.size(), n++)
+    {
+        sum=0;
+        for (int k=0; k < hop; k++)
+        {
+            flow = abs(stft[n][k]) - abs(stft[n-1][k]);
+            if (flow > 0)
+                sum += flow;
+        }
+        spec[n] = sum;
+    }
+    return spec;
+}
+
+std::vector<float> Intensity::spec_diff(std::vector<std::vector<std::complex<float>>>& stft, int quality)
+{
+    std::vector<float> spec(stft.size(), 0.0f);
+    float sum;
+
+    int window_size, hop;
+    fft__get_window_params(quality, window_size, hop)
+    for (int n=1; n < stft.size(), n++)
+    {
+        sum=0;
+        for (int k=0; k < hop; k++)
+        {
+            sum += pow(stft[n][k] - stft[n-1][k], 2);
+        }
+        spec[n] = sum;
+    }
+    return spec;
+}
+
+std::vector<float> Intensity::log_spec(std::vector<std::vector<std::complex<float>>>& stft, int quality)
+{
+    std::vector<float> spec(stft.size(), 0.0f);
+    float flow;
+    float sum;
+
+    int window_size, hop;
+    fft__get_window_params(quality, window_size, hop)
+    for (int n=1; n < stft.size(), n++)
+    {
+        sum=0;
+        for (int k=0; k < hop; k++)
+        {
+            flow = log10(abs(stft[n][k])) - log10(abs(stft[n-1][k]));
+            if (flow > 0)
+                sum += flow;
+        }
+        spec[n] = sum;
+    }
+    return spec;
+}
+
+std::vector<float> Intensity::high_frequency(std::vector<std::vector<std::complex<float>>>& stft, int quality)
+{
+    std::vector<float> hfc(stft.size(), 0.0f);
+    float sum;
+
+    int window_size, hop;
+    fft__get_window_params(quality, window_size, hop)
+    for (int n=1; n < stft.size(), n++)
+    {
+        sum=0;
+        for (int k=0; k < hop; k++)
+        {
+            sum += k * pow(abs(stft[n][k]), 2)
+        }
+        hfc[n] = sum;
+    }
+    return hfc;
+}
+/*=== Intensity ===*/
+
+// Clamps a value to [0, 1] after normalization
+static float intensity__clamp(float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); }
+
+// Normalizes a vector by its maximum value — returns unchanged if max is 0
+static std::vector<float> intensity__norm_by_max(std::vector<float> v) {
+    float mx = *std::max_element(v.begin(), v.end());
+    if (mx == 0.f) return v;
+    for (float& x : v) x /= mx;
+    return v;
+}
+
+// Computes first-order discrete difference: D[n] = V[n] - V[n-1], D[0] = 0
+static std::vector<float> intensity__diff(const std::vector<float>& v) {
+    std::vector<float> d(v.size(), 0.f);
+    for (int n = 1; n < (int)v.size(); n++)
+        d[n] = v[n] - v[n-1];
+    return d;
+}
+
+std::vector<float> Intensity::base(const std::vector<float>& energy,
+                                   float acceleration_param,
+                                   float velocity_param,
+                                   float intensity_param)
+{
+    if (energy.empty()) return {};
+
+    // Normalize weights so alpha + beta + gamma = 1
+    float total = intensity_param + velocity_param + acceleration_param;
+    if (total == 0.f) total = 1.f;
+    float alpha = intensity_param   / total;
+    float beta  = velocity_param    / total;
+    float gamma = acceleration_param / total;
+
+    // Normalize energy to [0, 1] by max
+    std::vector<float> E_norm = intensity__norm_by_max(energy);
+
+    // Velocity V[n] = E_norm[n] - E_norm[n-1], normalized to [0, 1]
+    std::vector<float> V = intensity__norm_by_max(intensity__diff(E_norm));
+
+    // Acceleration A[n] = V[n] - V[n-1], normalized to [0, 1]
+    std::vector<float> A = intensity__norm_by_max(intensity__diff(V));
+
+    // Weighted combination
+    std::vector<float> I(energy.size());
+    for (int n = 0; n < (int)I.size(); n++)
+        I[n] = alpha * E_norm[n] + beta * V[n] + gamma * A[n];
+
+    // Final normalization by max
+    return intensity__norm_by_max(I);
+}
+
+std::vector<float> Intensity::velocity(const std::vector<float>& intensity,
+                                       float intensity_param,
+                                       float velocity_param,
+                                       char type)
+{
+    if (intensity.empty()) return {};
+
+    // Normalize weights
+    float total = intensity_param + velocity_param;
+    if (total == 0.f) total = 1.f;
+    float alpha = intensity_param / total;
+    float beta  = velocity_param  / total;
+
+    std::vector<float> V = intensity__norm_by_max(intensity__diff(intensity));
+
+    std::vector<float> out(intensity.size());
+    for (int n = 0; n < (int)out.size(); n++) {
+        if (type == '*')
+            out[n] = intensity[n] * (1.f + beta * V[n]); // multiplicative modulation
+        else
+            out[n] = alpha * intensity[n] + beta * V[n]; // additive blend (default)
+    }
+    return intensity__norm_by_max(out);
+}
+
+std::vector<float> Intensity::acceleration(const std::vector<float>& intensity,
+                                           float intensity_param,
+                                           float acceleration_param,
+                                           char type)
+{
+    if (intensity.empty()) return {};
+
+    float total = intensity_param + acceleration_param;
+    if (total == 0.f) total = 1.f;
+    float alpha = intensity_param    / total;
+    float gamma = acceleration_param / total;
+
+    // Acceleration = second-order difference of intensity
+    std::vector<float> V = intensity__diff(intensity);
+    std::vector<float> A = intensity__norm_by_max(intensity__diff(V));
+
+    std::vector<float> out(intensity.size());
+    for (int n = 0; n < (int)out.size(); n++) {
+        if (type == '*')
+            out[n] = intensity[n] * (1.f + gamma * A[n]);
+        else
+            out[n] = alpha * intensity[n] + gamma * A[n];
+    }
+    return intensity__norm_by_max(out);
+}
+
+std::vector<float> Intensity::combined(const std::vector<float>& intensity,
+                                       float intensity_param,
+                                       float velocity_param,
+                                       float acceleration_param,
+                                       char type)
+{
+    if (intensity.empty()) return {};
+
+    float total = intensity_param + velocity_param + acceleration_param;
+    if (total == 0.f) total = 1.f;
+    float alpha = intensity_param    / total;
+    float beta  = velocity_param     / total;
+    float gamma = acceleration_param / total;
+
+    std::vector<float> V = intensity__norm_by_max(intensity__diff(intensity));
+    std::vector<float> A = intensity__norm_by_max(intensity__diff(V));
+
+    std::vector<float> out(intensity.size());
+    for (int n = 0; n < (int)out.size(); n++) {
+        if (type == '*')
+            out[n] = intensity[n] * (1.f + beta * V[n] + gamma * A[n]);
+        else
+            out[n] = alpha * intensity[n] + beta * V[n] + gamma * A[n];
+    }
+    return intensity__norm_by_max(out);
+}
+
+std::vector<float> Intensity::smooth(const std::vector<float>& intensity,
+                                     float smoothing_param)
+{
+    if (intensity.empty()) return {};
+
+    // Map smoothing_param [0, 1] to window size [1, N/2]
+    int N    = (int)intensity.size();
+    int half = std::max(1, (int)(smoothing_param * (N / 2)));
+    int win  = 2 * half + 1;
+
+    std::vector<float> out(N, 0.f);
+    for (int n = 0; n < N; n++) {
+        int lo    = std::max(0, n - half);
+        int hi    = std::min(N - 1, n + half);
+        float sum = 0.f;
+        for (int i = lo; i <= hi; i++) sum += intensity[i];
+        out[n] = sum / (float)(hi - lo + 1);
+    }
+    return out;
+}
+
+std::vector<float> Intensity::relative(const std::vector<float>& intensity,
+                                       const std::vector<float>& smoothed_intensity)
+{
+    if (intensity.size() != smoothed_intensity.size()) return {};
+    std::vector<float> out(intensity.size());
+    for (int n = 0; n < (int)out.size(); n++) {
+        // Avoid division by zero
+        out[n] = (smoothed_intensity[n] != 0.f) ? intensity[n] / smoothed_intensity[n] : 0.f;
+    }
+    return out;
+}
+
+std::vector<float> Intensity::centered(const std::vector<float>& intensity,
+                                       const std::vector<float>& smoothed_intensity)
+{
+    if (intensity.size() != smoothed_intensity.size()) return {};
+    std::vector<float> out(intensity.size());
+    for (int n = 0; n < (int)out.size(); n++)
+        out[n] = intensity[n] - smoothed_intensity[n];
+    return out;
+}
+
+std::vector<float> Intensity::derived(const std::vector<float>& intensity)
+{
+    // Raw discrete derivative — no normalization or weighting
+    return intensity__diff(intensity);
+}
+
+std::vector<float> Intensity::logarithmic(const std::vector<float>& intensity, char rms)
+{
+    float factor = (rms == 'r') ? 20.f : 10.f; // 'r' = amplitude (RMS), else power
+    std::vector<float> out(intensity.size());
+    for (int n = 0; n < (int)out.size(); n++) {
+        // Clamp to small positive value to avoid log(0) = -inf
+        float v = (intensity[n] > 1e-10f) ? intensity[n] : 1e-10f;
+        out[n] = factor * log10f(v);
+    }
+    return out;
+}
+
+/*=== SpectralIntensity ===*/
+
+std::vector<float> SpectralIntensity::spectral_flux(
+    const std::vector<std::vector<std::complex<float>>>& stft)
+{
+    if (stft.empty()) return {};
+    int N = (int)stft.size();
+    std::vector<float> out(N, 0.f);
+
+    for (int n = 1; n < N; n++) {
+        int bins = (int)stft[n].size();
+        for (int k = 0; k < bins; k++) {
+            float diff = std::abs(stft[n][k]) - std::abs(stft[n-1][k]);
+            if (diff > 0.f) out[n] += diff; // only count increases
+        }
+    }
+    return out;
+}
+
+std::vector<float> SpectralIntensity::spectral_diff(
+    const std::vector<std::vector<std::complex<float>>>& stft)
+{
+    if (stft.empty()) return {};
+    int N = (int)stft.size();
+    std::vector<float> out(N, 0.f);
+
+    for (int n = 1; n < N; n++) {
+        int bins = (int)stft[n].size();
+        for (int k = 0; k < bins; k++)
+            out[n] += std::abs(std::abs(stft[n][k]) - std::abs(stft[n-1][k]));
+    }
+    return out;
+}
+
+std::vector<float> SpectralIntensity::log_spectral_flux(
+    const std::vector<std::vector<std::complex<float>>>& stft)
+{
+    if (stft.empty()) return {};
+    int N = (int)stft.size();
+    std::vector<float> out(N, 0.f);
+
+    for (int n = 1; n < N; n++) {
+        int bins = (int)stft[n].size();
+        for (int k = 0; k < bins; k++) {
+            float log_curr = log1pf(std::abs(stft[n][k]));   // log(1 + |X[n][k]|)
+            float log_prev = log1pf(std::abs(stft[n-1][k]));
+            float diff = log_curr - log_prev;
+            if (diff > 0.f) out[n] += diff;
+        }
+    }
+    return out;
+}
+
+std::vector<float> SpectralIntensity::high_frequency_content(
+    const std::vector<std::vector<std::complex<float>>>& stft)
+{
+    if (stft.empty()) return {};
+    int N = (int)stft.size();
+    std::vector<float> out(N, 0.f);
+
+    for (int n = 0; n < N; n++) {
+        int bins = (int)stft[n].size();
+        for (int k = 0; k < bins; k++)
+            out[n] += (float)k * std::norm(stft[n][k]); // k * |X[n][k]|^2
+    }
+    return out;
 }
